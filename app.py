@@ -36,6 +36,27 @@ with col_right:
 st.markdown("---")
 
 # =========================
+# Helpers: numeric/scalar safety (CRITICAL FIX)
+# =========================
+def as1d(w) -> np.ndarray:
+    """Force 1D float64 array."""
+    return np.asarray(w, dtype=np.float64).reshape(-1)
+
+def as_col(w) -> np.ndarray:
+    """Force column vector (n,1) float64."""
+    return as1d(w).reshape(-1, 1)
+
+def to_scalar(x) -> float:
+    """
+    Convert numpy scalar / (1,) / (1,1) to Python float safely.
+    Raises if not a single value.
+    """
+    a = np.asarray(x)
+    if a.size != 1:
+        raise ValueError(f"Expected scalar but got shape={a.shape}, size={a.size}")
+    return float(a.reshape(-1)[0])
+
+# =========================
 # Helpers: ticker normalize
 # =========================
 def norm_ticker_index(idx) -> pd.Index:
@@ -66,16 +87,8 @@ def fmt_float(x: float) -> str:
     return f"{x:.6f}"
 
 def style_weights_table(df: pd.DataFrame, highlight_top_n: int = 5):
-    """
-    df columns (all in % units):
-    - Current Weight (%)
-    - Optimized Weight (%)
-    - Δ Weight (%)
-    - |Δ| (%)
-    """
     df2 = df.copy()
 
-    # mark top movers by |Δ|
     if "|Δ| (%)" in df2.columns:
         top_idx = df2["|Δ| (%)"].nlargest(highlight_top_n).index
     else:
@@ -86,7 +99,6 @@ def style_weights_table(df: pd.DataFrame, highlight_top_n: int = 5):
             return ["background-color: rgba(255, 215, 0, 0.22)"] * len(row)
         return [""] * len(row)
 
-    # red/green for delta; stronger for bigger moves
     sty = (
         df2.style
         .apply(highlight_rows, axis=1)
@@ -98,11 +110,9 @@ def style_weights_table(df: pd.DataFrame, highlight_top_n: int = 5):
         })
     )
 
-    # background gradient on |Δ|
     if "|Δ| (%)" in df2.columns:
         sty = sty.background_gradient(subset=["|Δ| (%)"], cmap="Blues")
 
-    # subtle red/green on Δ
     if "Δ Weight (%)" in df2.columns:
         sty = sty.background_gradient(subset=["Δ Weight (%)"], cmap="RdYlGn")
 
@@ -113,10 +123,6 @@ def make_weights_comparison_table(
     w_opt: pd.Series,
     top_n_highlight: int = 5
 ) -> Tuple[pd.DataFrame, Any]:
-
-    """
-    Return (df, styler) where weights are in % and rounded to 2 decimals.
-    """
     w_current = norm_series_index(w_current)
     w_opt = norm_series_index(w_opt)
 
@@ -131,10 +137,7 @@ def make_weights_comparison_table(
     df["Δ Weight (%)"] = df["Optimized Weight (%)"] - df["Current Weight (%)"]
     df["|Δ| (%)"] = df["Δ Weight (%)"].abs()
 
-    # investment-friendly sorting: biggest optimized weights first
     df = df.sort_values("Optimized Weight (%)", ascending=False)
-
-    # round numeric storage
     df = df.round(2)
 
     sty = style_weights_table(df, highlight_top_n=top_n_highlight)
@@ -149,17 +152,11 @@ def style_current_weights_table(w_current: pd.Series):
     )
 
 def style_rc_table(rc_tbl: pd.DataFrame):
-    """
-    Make risk contribution view more 'investment' friendly:
-    - weight and RC Share in %
-    - other columns keep numeric
-    """
     df = rc_tbl.copy()
     df["weight (%)"] = (df["weight"] * 100.0).round(2)
     df["RC Share (%)"] = (df["RC Share"] * 100.0).round(2)
     df = df.drop(columns=["weight", "RC Share"])
 
-    # reorder
     cols = ["weight (%)", "RC Share (%)", "MRC (to var)", "RC (to var)"]
     df = df[[c for c in cols if c in df.columns]].round(6)
 
@@ -211,24 +208,20 @@ def risk_contribution_table(weights: pd.Series, cov: pd.DataFrame) -> pd.DataFra
 
     tickers = list(cov.columns)
 
-    # 1) Force numeric covariance (DataFrame level)
     cov_num = cov.apply(pd.to_numeric, errors="coerce")
-
-    # 2) Force numpy float64 arrays (this is the key)
     cov_m = np.asarray(cov_num.values, dtype=np.float64)
+
     w = np.asarray(
         weights.reindex(tickers).fillna(0.0).astype(float).values,
         dtype=np.float64
     ).reshape(-1, 1)
 
-    # 3) Debug info (shows on the app page; helps even when Cloud redacts errors)
     st.caption(
         f"[DEBUG RC] w shape={w.shape}, w dtype={w.dtype} | "
         f"cov shape={cov_m.shape}, cov dtype={cov_m.dtype} | "
         f"cov NaNs={int(np.isnan(cov_m).sum())}"
     )
 
-    # 4) If Σ has NaNs, raise a clear error instead of failing later
     if np.isnan(cov_m).any():
         raise ValueError(
             "Covariance matrix contains NaNs. This usually happens when Close Price Data has missing/non-numeric "
@@ -236,7 +229,7 @@ def risk_contribution_table(weights: pd.Series, cov: pd.DataFrame) -> pd.DataFra
         )
 
     sigma_w = cov_m @ w
-    port_var = float((w.T @ cov_m @ w).item())  # .item() avoids dtype surprises
+    port_var = float((w.T @ cov_m @ w).item())  # safe scalar
     port_var = max(port_var, 1e-18)
 
     mrc = sigma_w.flatten()
@@ -250,11 +243,7 @@ def risk_contribution_table(weights: pd.Series, cov: pd.DataFrame) -> pd.DataFra
 
     return out
 
-
 def compute_rebalance_metrics(w_current: pd.Series, w_opt: pd.Series, trade_threshold: float = 0.005) -> dict:
-    """
-    trade_threshold: in weight units (0.005 = 0.5%)
-    """
     w_current = norm_series_index(w_current)
     w_opt = norm_series_index(w_opt)
 
@@ -265,7 +254,7 @@ def compute_rebalance_metrics(w_current: pd.Series, w_opt: pd.Series, trade_thre
     dw = wo - wc
     abs_dw = dw.abs()
 
-    turnover = float(abs_dw.sum() / 2.0)  # standard definition
+    turnover = float(abs_dw.sum() / 2.0)
     n_trades = int((abs_dw > trade_threshold).sum())
     max_change = float(abs_dw.max()) if len(abs_dw) else 0.0
 
@@ -288,9 +277,6 @@ def compute_before_after_risk_summary(
     illiquid_tickers: tuple[str, ...],
     equity_tickers: tuple[str, ...],
 ) -> pd.DataFrame:
-    """
-    Returns a compact table for PM-style comparison.
-    """
     w_current = norm_series_index(w_current).reindex(cov_annual.columns).fillna(0.0)
     w_opt = norm_series_index(w_opt).reindex(cov_annual.columns).fillna(0.0)
     cov_annual = norm_cov(cov_annual)
@@ -332,9 +318,8 @@ def compute_before_after_risk_summary(
 def make_download_bytes(df: pd.DataFrame) -> bytes:
     return df.to_csv(index=True).encode("utf-8")
 
-
 # =========================
-# Part I μ loader (Input sheet: usecols="B,K", skiprows=4; return_annualized / 100)
+# Part I μ loader
 # =========================
 def load_mu_part1(uploaded) -> tuple[pd.Series, str]:
     xls = pd.ExcelFile(uploaded)
@@ -344,13 +329,13 @@ def load_mu_part1(uploaded) -> tuple[pd.Series, str]:
     df = pd.read_excel(uploaded, sheet_name="Input", usecols="B,K", skiprows=4)
     df.columns = ["Ticker", "Return_Annualized"]
     df["Ticker"] = df["Ticker"].astype(str).str.strip().str.upper()
-    mu = df.set_index("Ticker")["Return_Annualized"].astype(float) / 100.0  # IMPORTANT
+    mu = df.set_index("Ticker")["Return_Annualized"].astype(float) / 100.0
     mu = norm_series_index(mu)
 
     return mu, "Input!B,K (skiprows=4) Return_Annualized / 100 (Part I-aligned)"
 
 # =========================
-# Part I Σ loader (Close Price Data: log returns cov * 252)
+# Part I Σ loader
 # =========================
 def load_cov_part1(uploaded) -> tuple[pd.DataFrame, str, dict]:
     xls = pd.ExcelFile(uploaded)
@@ -359,7 +344,6 @@ def load_cov_part1(uploaded) -> tuple[pd.DataFrame, str, dict]:
 
     prices = pd.read_excel(uploaded, sheet_name="Close Price Data")
 
-    # assume first col is Date
     date_col = None
     for c in prices.columns:
         if str(c).strip().lower() in ["date", "datetime"]:
@@ -371,18 +355,15 @@ def load_cov_part1(uploaded) -> tuple[pd.DataFrame, str, dict]:
     prices[date_col] = pd.to_datetime(prices[date_col])
     prices = prices.sort_values(date_col).set_index(date_col)
 
-    # numeric + normalize tickers
     prices = prices.apply(pd.to_numeric, errors="coerce")
     prices.columns = norm_ticker_index(prices.columns)
 
-    # meta info
     start_date = prices.index.min()
     end_date = prices.index.max()
     n_rows = int(prices.shape[0])
     n_cols = int(prices.shape[1])
     missing_ratio = float(prices.isna().sum().sum() / (prices.size + 1e-18))
 
-    # each ticker valid count
     valid_counts = prices.notna().sum().sort_values(ascending=False)
     min_valid = int(valid_counts.min()) if len(valid_counts) else 0
     max_valid = int(valid_counts.max()) if len(valid_counts) else 0
@@ -401,20 +382,16 @@ def load_cov_part1(uploaded) -> tuple[pd.DataFrame, str, dict]:
         "n_rows": n_rows,
         "n_cols": n_cols,
         "missing_ratio": missing_ratio,
-        "valid_counts": valid_counts,   # pd.Series
+        "valid_counts": valid_counts,
         "min_valid": min_valid,
         "max_valid": max_valid,
     }
 
     return cov_annual, "Close Price Data → log_returns.cov()*252 (Part I-aligned)", meta
 
-
 # =========================
-# Part I policy constraints helper
+# Policy constraints helper (CRITICAL FIX: always return scalar)
 # =========================
-def w1d(w):
-    return np.asarray(w, dtype=np.float64).ravel()
-
 def add_policy_constraints(
     constraints: list,
     tickers: list[str],
@@ -426,29 +403,29 @@ def add_policy_constraints(
 ):
     if "SGOV" in tickers:
         idx = tickers.index("SGOV")
-        constraints.append({"type": "ineq", "fun": lambda w, idx=idx: w1d(w)[idx] - sgov_min})
-        constraints.append({"type": "ineq", "fun": lambda w, idx=idx: sgov_max - w1d(w)[idx]})
+        constraints.append({"type": "ineq", "fun": lambda w, idx=idx: to_scalar(as1d(w)[idx] - sgov_min)})
+        constraints.append({"type": "ineq", "fun": lambda w, idx=idx: to_scalar(sgov_max - as1d(w)[idx])})
 
     if "FEHIX" in tickers:
         idx = tickers.index("FEHIX")
-        constraints.append({"type": "ineq", "fun": lambda w, idx=idx: fehix_max - w1d(w)[idx]})
+        constraints.append({"type": "ineq", "fun": lambda w, idx=idx: to_scalar(fehix_max - as1d(w)[idx])})
     if "HYG" in tickers:
         idx = tickers.index("HYG")
-        constraints.append({"type": "ineq", "fun": lambda w, idx=idx: hyg_max - w1d(w)[idx]})
+        constraints.append({"type": "ineq", "fun": lambda w, idx=idx: to_scalar(hyg_max - as1d(w)[idx])})
     if "FEGIX" in tickers:
         idx = tickers.index("FEGIX")
-        constraints.append({"type": "ineq", "fun": lambda w, idx=idx: fegix_max - w1d(w)[idx]})
+        constraints.append({"type": "ineq", "fun": lambda w, idx=idx: to_scalar(fegix_max - as1d(w)[idx])})
 
     ill_idx = [tickers.index(t) for t in illiquid_tickers if t in tickers]
     if len(ill_idx) > 0:
-        constraints.append({"type": "ineq", "fun": lambda w, ii=ill_idx: illiquid_max - float(np.sum(w1d(w)[ii]))})
+        constraints.append({"type": "ineq", "fun": lambda w, ii=ill_idx: to_scalar(illiquid_max - np.sum(as1d(w)[ii]))})
 
     eq_idx = [tickers.index(t) for t in equity_tickers if t in tickers]
     if len(eq_idx) > 0:
-        constraints.append({"type": "ineq", "fun": lambda w, ei=eq_idx: equity_max - float(np.sum(w1d(w)[ei]))})
+        constraints.append({"type": "ineq", "fun": lambda w, ei=eq_idx: to_scalar(equity_max - np.sum(as1d(w)[ei]))})
 
 # =========================
-# Part I-aligned solvers
+# Solvers
 # =========================
 def solve_part1_theoretical(
     mu_annual: pd.Series,
@@ -476,16 +453,17 @@ def solve_part1_theoretical(
 
     n = len(tickers)
     w0 = w_current.reindex(tickers).fillna(0.0).astype(float).values
-    cov_m = cov.values
-    mu_v = mu.values
+    cov_m = np.asarray(cov.values, dtype=np.float64)
+    mu_v = np.asarray(mu.values, dtype=np.float64)
 
     def neg_utility(w):
-        ret = float(w @ mu_v)
-        var = float(w.T @ cov_m @ w)
+        w = as1d(w)
+        ret = to_scalar(w @ mu_v)
+        var = to_scalar((as_col(w).T @ cov_m @ as_col(w)).item())
         util = ret - 0.5 * risk_aversion * var
         return -util
 
-    constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
+    constraints = [{"type": "eq", "fun": lambda w: to_scalar(np.sum(as1d(w)) - 1.0)}]
 
     add_policy_constraints(
         constraints, tickers,
@@ -497,10 +475,7 @@ def solve_part1_theoretical(
 
     bounds = [(0.0, max_asset_weight) for _ in range(n)]
     x0 = np.clip(w0, 0.0, max_asset_weight)
-    if x0.sum() <= 1e-12:
-        x0 = np.ones(n) / n
-    else:
-        x0 = x0 / x0.sum()
+    x0 = (np.ones(n) / n) if x0.sum() <= 1e-12 else (x0 / x0.sum())
 
     res = minimize(
         fun=neg_utility,
@@ -543,21 +518,22 @@ def solve_part1_incremental(
 
     n = len(tickers)
     w0 = w_current.reindex(tickers).fillna(0.0).astype(float).values
-    cov_m = cov.values
-    mu_v = mu.values
+    cov_m = np.asarray(cov.values, dtype=np.float64)
+    mu_v = np.asarray(mu.values, dtype=np.float64)
 
     def neg_utility(w):
-        ret = float(w @ mu_v)
-        var = float(w.T @ cov_m @ w)
+        w = as1d(w)
+        ret = to_scalar(w @ mu_v)
+        var = float((as_col(w).T @ cov_m @ as_col(w)).item())  # safe
         util = ret - 0.5 * risk_aversion * var
         return -util
 
-    constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
+    constraints = [{"type": "eq", "fun": lambda w: to_scalar(np.sum(as1d(w)) - 1.0)}]
 
-    # |w_i - w0_i| <= max_active_weight
+    w0_1d = as1d(w0)
     for i in range(n):
-        constraints.append({"type": "ineq", "fun": lambda w, i=i: max_active_weight - (w[i] - w0[i])})
-        constraints.append({"type": "ineq", "fun": lambda w, i=i: max_active_weight + (w[i] - w0[i])})
+        constraints.append({"type": "ineq", "fun": lambda w, i=i: to_scalar(max_active_weight - (as1d(w)[i] - w0_1d[i]))})
+        constraints.append({"type": "ineq", "fun": lambda w, i=i: to_scalar(max_active_weight + (as1d(w)[i] - w0_1d[i]))})
 
     add_policy_constraints(
         constraints, tickers,
@@ -569,10 +545,7 @@ def solve_part1_incremental(
 
     bounds = [(0.0, max_asset_weight) for _ in range(n)]
     x0 = np.clip(w0, 0.0, max_asset_weight)
-    if x0.sum() <= 1e-12:
-        x0 = np.ones(n) / n
-    else:
-        x0 = x0 / x0.sum()
+    x0 = (np.ones(n) / n) if x0.sum() <= 1e-12 else (x0 / x0.sum())
 
     res = minimize(
         fun=neg_utility,
@@ -616,31 +589,38 @@ def solve_part1_risk_budget(
 
     n = len(tickers)
     w0 = w_current.reindex(tickers).fillna(0.0).astype(float).values
-    cov_m = cov.values
-    mu_v = mu.values
+
+    # force float64
+    cov_m = np.asarray(cov.values, dtype=np.float64)
+    mu_v = np.asarray(mu.values, dtype=np.float64)
 
     def rc_shares(w):
-        w = np.array(w).reshape(-1, 1)
-        sigma_w = cov_m @ w
-        pv = float(w.T @ cov_m @ w)
+        wcol = as_col(w)  # (n,1)
+        sigma_w = cov_m @ wcol
+        pv = float((wcol.T @ cov_m @ wcol).item())  # CRITICAL FIX (.item())
         pv = max(pv, 1e-18)
         mrc = sigma_w.flatten()
-        rc = (w.flatten() * mrc)
-        return rc / pv
+        rc = (wcol.flatten() * mrc)
+        return rc / pv  # 1D vector
 
     def neg_utility_with_penalty(w):
-        ret = float(w @ mu_v)
-        var = float(w.T @ cov_m @ w)
+        w = as1d(w)
+
+        ret = float((w @ mu_v))  # scalar
+        var = float((as_col(w).T @ cov_m @ as_col(w)).item())  # CRITICAL FIX (.item())
+
         util = ret - 0.5 * risk_aversion * var
 
-        shares = rc_shares(w)
-        p1 = 2000.0 * max(0.0, float(shares.max() - max_rc_share)) ** 2
-        top3 = float(np.sort(shares)[-3:].sum())
-        p2 = 2000.0 * max(0.0, top3 - top3_rc_cap) ** 2
+        shares = rc_shares(w)  # 1D vector
+        max_share = float(np.max(shares))
+        top3 = float(np.sum(np.sort(shares)[-3:]))
+
+        p1 = 2000.0 * max(0.0, max_share - float(max_rc_share)) ** 2
+        p2 = 2000.0 * max(0.0, top3 - float(top3_rc_cap)) ** 2
 
         return -(util) + p1 + p2
 
-    constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
+    constraints = [{"type": "eq", "fun": lambda w: to_scalar(np.sum(as1d(w)) - 1.0)}]
 
     add_policy_constraints(
         constraints, tickers,
@@ -652,10 +632,7 @@ def solve_part1_risk_budget(
 
     bounds = [(0.0, max_asset_weight) for _ in range(n)]
     x0 = np.clip(w0, 0.0, max_asset_weight)
-    if x0.sum() <= 1e-12:
-        x0 = np.ones(n) / n
-    else:
-        x0 = x0 / x0.sum()
+    x0 = (np.ones(n) / n) if x0.sum() <= 1e-12 else (x0 / x0.sum())
 
     res = minimize(
         fun=neg_utility_with_penalty,
@@ -672,7 +649,7 @@ def solve_part1_risk_budget(
     return w / w.sum()
 
 # =========================
-# Constraints report (extended with policy constraints)
+# Constraints report
 # =========================
 def constraints_report(
     w_opt: pd.Series,
@@ -726,7 +703,6 @@ def constraints_report(
         rep.append(("Top-3 RC share cap", top3 <= top3_rc_cap + 1e-10, top3))
 
     df = pd.DataFrame(rep, columns=["Constraint", "Pass", "Value"])
-    # make Value nicer for display
     df["Value"] = df["Value"].map(lambda x: f"{x:.4f}" if isinstance(x, (int, float, np.floating)) else x)
     return df
 
@@ -807,7 +783,6 @@ equity_max   = st.sidebar.slider("Equity bucket max",   0.0, 1.00, 0.60, 0.01, k
 illiquid_tickers = ("FECRX", "FERLX")
 equity_tickers   = ("FEGIX", "SGOIX", "FEAIX", "FESCX", "FESMX")
 
-# Approach-specific constraints (keep your structure)
 max_active = turnover_cap = None
 max_rc_share = top3_rc_cap = None
 
@@ -822,11 +797,10 @@ if approach.startswith("C)"):
     top3_rc_cap = st.sidebar.slider("Max Top-3 RC Share", 0.10, 1.00, 0.70, 0.01, key="top3_rc_cap_slider")
 
 highlight_top_n = 5
-
 run = st.sidebar.button("Run Optimization", type="primary", key="run_button")
 
 # =========================
-# Load sheets: Current Portfolio (w_current) + μ + Σ (Part I-aligned)
+# Load sheets
 # =========================
 need = {"Current Portfolio", "Input", "Close Price Data"}
 missing = need - set(xls.sheet_names)
@@ -968,15 +942,17 @@ try:
             raise ValueError("Target return is required.")
 
         tickers = list(cov_annual.columns)
-        cov_m = cov_annual.values
-        mu_v = mu_u.values
+        cov_m = np.asarray(cov_annual.values, dtype=np.float64)
+        mu_v = np.asarray(mu_u.values, dtype=np.float64)
         n = len(tickers)
 
-        def port_var(w): return float(w.T @ cov_m @ w)
+        def port_var(w):
+            w = as1d(w)
+            return float((as_col(w).T @ cov_m @ as_col(w)).item())
 
         constraints = [
-            {"type": "eq", "fun": lambda w: np.sum(w) - 1.0},
-            {"type": "ineq", "fun": lambda w: float(w @ mu_v) - float(target_return)},
+            {"type": "eq", "fun": lambda w: to_scalar(np.sum(as1d(w)) - 1.0)},
+            {"type": "ineq", "fun": lambda w: to_scalar(as1d(w) @ mu_v - float(target_return))},
         ]
 
         add_policy_constraints(
@@ -1019,11 +995,10 @@ m1.metric("Return (Ann.)", f"{opt_stats['return']*100:.2f}%")
 m2.metric("Vol (Ann.)", f"{opt_stats['vol']*100:.2f}%")
 m3.metric("Sharpe (Rf)", f"{opt_stats['sharpe']:.2f}" if np.isfinite(opt_stats["sharpe"]) else "NA")
 
-# ---------- Rebalance Summary (PM-style) ----------
+# ---------- Rebalance Summary ----------
 st.subheader("Rebalance Summary")
 
 trade_threshold = 0.0001
-
 reb = compute_rebalance_metrics(w_current_u, w_opt, trade_threshold=trade_threshold)
 
 s1, s2, s3, s4 = st.columns(4)
@@ -1035,7 +1010,6 @@ s4.metric("Adds / Trims", f"{reb['adds']} / {reb['trims']}")
 # ---------- Downloads ----------
 st.caption("Exports are designed for execution workflow (trades + weights).")
 
-# Build trades table
 idx = list(cov_annual.columns)
 wc = w_current_u.reindex(idx).fillna(0.0)
 wo = w_opt.reindex(idx).fillna(0.0)
@@ -1048,8 +1022,6 @@ trades_df = pd.DataFrame(
     },
     index=idx
 )
-
-# Optional: sort by biggest trades
 trades_sorted = trades_df.sort_values("|Δ| (pp)", ascending=False)
 
 d1, d2 = st.columns(2)
@@ -1072,7 +1044,7 @@ with d2:
     )
 
 # =========================
-# Professional layout: tabs
+# Tabs
 # =========================
 tab1, tab2, tab3 = st.tabs(["Weights", "Risk Contribution", "Constraints Check"])
 
@@ -1082,7 +1054,6 @@ with tab1:
     st.caption("Highlighted rows = largest absolute rebalances (by |Δw|). All weights shown in %.")
     st.dataframe(w_sty, use_container_width=True, height=520)
 
-    # Optional quick summary: top trades
     top_trades = w_df.sort_values("|Δ| (%)", ascending=False).head(highlight_top_n)
     st.write(f"Top {highlight_top_n} Rebalances")
     st.dataframe(
@@ -1095,7 +1066,6 @@ with tab1:
         use_container_width=True
     )
 
-    # Bar chart: optimized weights (keep raw weights for chart)
     st.write("Optimized Weights (bar)")
     st.bar_chart(w_opt)
 
@@ -1106,7 +1076,7 @@ with tab2:
     st.dataframe(rc_opt_sty, use_container_width=True, height=520)
 
     st.write("Risk Contribution Share (bar)")
-    st.bar_chart((rc_opt["RC Share"] * 100.0).round(2))  # show % on chart
+    st.bar_chart((rc_opt["RC Share"] * 100.0).round(2))
 
 with tab3:
     st.subheader("Constraints Check")
@@ -1125,5 +1095,4 @@ with tab3:
         max_rc_share=max_rc_share,
         top3_rc_cap=top3_rc_cap
     )
-
     st.dataframe(rep_df, use_container_width=True)
