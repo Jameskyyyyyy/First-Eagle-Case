@@ -209,16 +209,29 @@ def risk_contribution_table(weights: pd.Series, cov: pd.DataFrame) -> pd.DataFra
     weights = norm_series_index(weights)
     cov = norm_cov(cov)
 
+    # ✅ 强制 covariance 全部变成 float（遇到非数值直接变 NaN）
+    cov = cov.apply(pd.to_numeric, errors="coerce").astype(float)
+
     tickers = cov.columns
-    w = weights.reindex(tickers).fillna(0.0).values.reshape(-1, 1)
-    cov_m = cov.values
+
+    # ✅ 强制 weights 变 float
+    w = weights.reindex(tickers).fillna(0.0).astype(float).values.reshape(-1, 1)
+    cov_m = cov.values.astype(float)
+
+    # ✅ 防御：若 Σ 中有 NaN，直接报更清晰的错误（比 redacted 好）
+    if np.isnan(cov_m).any():
+        bad = np.argwhere(np.isnan(cov_m))
+        raise ValueError(
+            f"Covariance matrix contains NaN values (example bad cell indices: {bad[:5].tolist()}). "
+            "Check Close Price Data for missing prices or non-numeric columns."
+        )
 
     sigma_w = cov_m @ w
     port_var = float(w.T @ cov_m @ w)
     port_var = max(port_var, 1e-18)
 
-    mrc = sigma_w.flatten()                 # marginal contribution to variance (Σw)
-    rc = (w.flatten() * mrc)                # contribution to variance (w_i*(Σw)_i)
+    mrc = sigma_w.flatten()
+    rc = (w.flatten() * mrc)
     rc_share = rc / port_var
 
     out = pd.DataFrame(
@@ -227,6 +240,7 @@ def risk_contribution_table(weights: pd.Series, cov: pd.DataFrame) -> pd.DataFra
     ).sort_values("RC Share", ascending=False)
 
     return out
+
 
 def compute_rebalance_metrics(w_current: pd.Series, w_opt: pd.Series, trade_threshold: float = 0.005) -> dict:
     """
