@@ -605,7 +605,12 @@ def solve_part1_risk_budget(
     w_current = norm_series_index(w_current)
 
     tickers = list(cov_annual.columns)
-    cov = cov_annual.loc[tickers, tickers].astype(float)
+
+    # Force numeric + float64 for stability (important on Cloud)
+    cov = cov_annual.loc[tickers, tickers].apply(pd.to_numeric, errors="coerce").astype(float)
+    if cov.isna().any().any():
+        raise ValueError("Covariance matrix contains NaNs. Please clean Close Price Data / remove tickers with insufficient history.")
+
     mu = mu_annual.reindex(tickers).astype(float)
     if mu.isna().any():
         missing = mu[mu.isna()].index.tolist()
@@ -613,29 +618,37 @@ def solve_part1_risk_budget(
 
     n = len(tickers)
     w0 = w_current.reindex(tickers).fillna(0.0).astype(float).values
-    cov_m = cov.values
-    mu_v = mu.values
+
+    cov_m = np.asarray(cov.values, dtype=np.float64)   # (n,n)
+    mu_v = np.asarray(mu.values, dtype=np.float64)     # (n,)
 
     def rc_shares(w):
-        w = np.array(w).reshape(-1, 1)
-        sigma_w = cov_m @ w
-        pv = float(w.T @ cov_m @ w)
-        pv = max(pv, 1e-18)
-        mrc = sigma_w.flatten()
-        rc = (w.flatten() * mrc)
-        return rc / pv
+        w = np.asarray(w, dtype=np.float64).reshape(-1, 1)  # (n,1)
+        sigma_w = cov_m @ w                                  # (n,1)
+        pv = (w.T @ cov_m @ w).item()                         # ✅ scalar
+        pv = max(float(pv), 1e-18)
+
+        mrc = sigma_w.ravel()                                 # (n,)
+        rc = w.ravel() * mrc                                  # (n,)
+        return rc / pv                                        # (n,)
 
     def neg_utility_with_penalty(w):
+        w = np.asarray(w, dtype=np.float64).ravel()           # ✅ 1D (n,)
         ret = float(w @ mu_v)
-        var = float(w.T @ cov_m @ w)
-        util = ret - 0.5 * risk_aversion * var
+        var = (w.reshape(-1, 1).T @ cov_m @ w.reshape(-1, 1)).item()  # ✅ scalar
+        var = float(var)
+
+        util = ret - 0.5 * float(risk_aversion) * var
 
         shares = rc_shares(w)
-        p1 = 2000.0 * max(0.0, float(shares.max() - max_rc_share)) ** 2
-        top3 = float(np.sort(shares)[-3:].sum())
-        p2 = 2000.0 * max(0.0, top3 - top3_rc_cap) ** 2
 
-        return -(util) + p1 + p2
+        max_share = float(np.max(shares))
+        top3 = float(np.sort(shares)[-3:].sum())
+
+        p1 = 2000.0 * max(0.0, max_share - float(max_rc_share)) ** 2
+        p2 = 2000.0 * max(0.0, top3 - float(top3_rc_cap)) ** 2
+
+        return -util + p1 + p2
 
     constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
 
@@ -648,11 +661,10 @@ def solve_part1_risk_budget(
     )
 
     bounds = [(0.0, max_asset_weight) for _ in range(n)]
+
     x0 = np.clip(w0, 0.0, max_asset_weight)
-    if x0.sum() <= 1e-12:
-        x0 = np.ones(n) / n
-    else:
-        x0 = x0 / x0.sum()
+    x0 = (np.ones(n) / n) if x0.sum() <= 1e-12 else (x0 / x0.sum())
+    x0 = np.asarray(x0, dtype=np.float64).ravel()  # ✅ ensure 1D float64
 
     res = minimize(
         fun=neg_utility_with_penalty,
@@ -665,8 +677,10 @@ def solve_part1_risk_budget(
     if not res.success:
         raise RuntimeError(f"Risk-budget optimization failed: {res.message}")
 
-    w = pd.Series(res.x, index=tickers)
-    return w / w.sum()
+    w = pd.Series(np.asarray(res.x, dtype=np.float64).ravel(), index=tickers)
+    w = w / w.sum()
+    return w
+
 
 # =========================
 # Constraints report (extended with policy constraints)
