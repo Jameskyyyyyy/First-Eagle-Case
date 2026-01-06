@@ -752,7 +752,7 @@ st.dataframe(df_preview, use_container_width=True)
 st.sidebar.header("2) Optimization Settings")
 
 rf = st.sidebar.number_input(
-    "Risk-free rate (annual) [for Sharpe display]",
+    "Risk-free rate (annual)",
     value=0.00, step=0.005, format="%.3f", key="rf_input"
 )
 
@@ -788,7 +788,7 @@ max_asset_weight = st.sidebar.slider(
     "Max weight per asset (single-name cap)", 0.05, 1.00, 0.40, 0.01, key="max_asset_weight_slider"
 )
 
-st.sidebar.markdown("**Policy constraints (Part I-aligned)**")
+st.sidebar.markdown("**Policy constraints**")
 sgov_min = st.sidebar.slider("SGOV min", 0.0, 0.50, 0.02, 0.01, key="sgov_min_slider")
 sgov_max = st.sidebar.slider("SGOV max", 0.0, 0.50, 0.10, 0.01, key="sgov_max_slider")
 if sgov_max < sgov_min:
