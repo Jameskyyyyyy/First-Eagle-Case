@@ -794,7 +794,7 @@ if approach.startswith("B)"):
 if approach.startswith("C)"):
     st.sidebar.subheader("Constraints (Risk Budget)")
     max_rc_share = st.sidebar.slider("Max RC Share per asset", 0.05, 1.00, 0.30, 0.01, key="max_rc_share_slider")
-    top3_rc_cap = st.sidebar.slider("Max Top-3 RC Share", 0.10, 1.00, 0.70, 0.01, key="top3_rc_cap_slider")
+    top3_rc_cap = st.sidebar.slider("Max Top-3 RC Share", 0.10, 1.00, 1.00, 0.01, key="top3_rc_cap_slider")
 
 highlight_top_n = 5
 run = st.sidebar.button("Run Optimization", type="primary", key="run_button")
