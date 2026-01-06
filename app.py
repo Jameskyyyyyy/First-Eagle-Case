@@ -616,26 +616,33 @@ def solve_part1_risk_budget(
     cov_m = cov.values
     mu_v = mu.values
 
-    def rc_shares(w):
-        w = np.array(w).reshape(-1, 1)
-        sigma_w = cov_m @ w
-        pv = float(w.T @ cov_m @ w)
-        pv = max(pv, 1e-18)
-        mrc = sigma_w.flatten()
-        rc = (w.flatten() * mrc)
-        return rc / pv
+def rc_shares(w):
+    w = np.asarray(w, dtype=np.float64).reshape(-1, 1)   # ensure (n,1)
+    sigma_w = cov_m @ w                                  # (n,1)
+    pv = (w.T @ cov_m @ w).item()                         # ✅ scalar
+    pv = max(float(pv), 1e-18)
 
-    def neg_utility_with_penalty(w):
-        ret = float(w @ mu_v)
-        var = float(w.T @ cov_m @ w)
-        util = ret - 0.5 * risk_aversion * var
+    mrc = sigma_w.ravel()                                 # ✅ 1D (n,)
+    rc = (w.ravel() * mrc)                                # ✅ 1D (n,)
+    shares = rc / pv                                      # ✅ 1D (n,)
+    return shares
 
-        shares = rc_shares(w)
-        p1 = 2000.0 * max(0.0, float(shares.max() - max_rc_share)) ** 2
-        top3 = float(np.sort(shares)[-3:].sum())
-        p2 = 2000.0 * max(0.0, top3 - top3_rc_cap) ** 2
+def neg_utility_with_penalty(w):
+    w = np.asarray(w, dtype=np.float64).ravel()           # ensure 1D
+    ret = float(w @ mu_v)                                 # scalar
+    var = (w.reshape(-1,1).T @ cov_m @ w.reshape(-1,1)).item()  # ✅ scalar
+    var = float(var)
 
-        return -(util) + p1 + p2
+    util = ret - 0.5 * risk_aversion * var
+
+    shares = rc_shares(w)
+    max_share = float(np.max(shares))                     # ✅ scalar
+    top3 = float(np.sort(shares)[-3:].sum())              # ✅ scalar
+
+    p1 = 2000.0 * max(0.0, max_share - float(max_rc_share)) ** 2
+    p2 = 2000.0 * max(0.0, top3 - float(top3_rc_cap)) ** 2
+
+    return -util + p1 + p2
 
     constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
 
