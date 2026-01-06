@@ -209,25 +209,34 @@ def risk_contribution_table(weights: pd.Series, cov: pd.DataFrame) -> pd.DataFra
     weights = norm_series_index(weights)
     cov = norm_cov(cov)
 
-    # ✅ 强制 covariance 全部变成 float（遇到非数值直接变 NaN）
-    cov = cov.apply(pd.to_numeric, errors="coerce").astype(float)
+    tickers = list(cov.columns)
 
-    tickers = cov.columns
+    # 1) Force numeric covariance (DataFrame level)
+    cov_num = cov.apply(pd.to_numeric, errors="coerce")
 
-    # ✅ 强制 weights 变 float
-    w = weights.reindex(tickers).fillna(0.0).astype(float).values.reshape(-1, 1)
-    cov_m = cov.values.astype(float)
+    # 2) Force numpy float64 arrays (this is the key)
+    cov_m = np.asarray(cov_num.values, dtype=np.float64)
+    w = np.asarray(
+        weights.reindex(tickers).fillna(0.0).astype(float).values,
+        dtype=np.float64
+    ).reshape(-1, 1)
 
-    # ✅ 防御：若 Σ 中有 NaN，直接报更清晰的错误（比 redacted 好）
+    # 3) Debug info (shows on the app page; helps even when Cloud redacts errors)
+    st.caption(
+        f"[DEBUG RC] w shape={w.shape}, w dtype={w.dtype} | "
+        f"cov shape={cov_m.shape}, cov dtype={cov_m.dtype} | "
+        f"cov NaNs={int(np.isnan(cov_m).sum())}"
+    )
+
+    # 4) If Σ has NaNs, raise a clear error instead of failing later
     if np.isnan(cov_m).any():
-        bad = np.argwhere(np.isnan(cov_m))
         raise ValueError(
-            f"Covariance matrix contains NaN values (example bad cell indices: {bad[:5].tolist()}). "
-            "Check Close Price Data for missing prices or non-numeric columns."
+            "Covariance matrix contains NaNs. This usually happens when Close Price Data has missing/non-numeric "
+            "prices for one or more tickers. Please clean the input or remove tickers with insufficient history."
         )
 
     sigma_w = cov_m @ w
-    port_var = float(w.T @ cov_m @ w)
+    port_var = float((w.T @ cov_m @ w).item())  # .item() avoids dtype surprises
     port_var = max(port_var, 1e-18)
 
     mrc = sigma_w.flatten()
