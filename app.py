@@ -842,9 +842,6 @@ c1.metric("Return (Ann.)", f"{cur_stats['return']*100:.2f}%")
 c2.metric("Vol (Ann.)", f"{cur_stats['vol']*100:.2f}%")
 c3.metric("Sharpe (Rf)", f"{cur_stats['sharpe']:.2f}" if np.isfinite(cur_stats["sharpe"]) else "NA")
 
-exp_ret_manual = (w_current_u * mu_u).sum()
-st.caption(f"Manual check — Expected Return = {exp_ret_manual*100:.2f}% (should match above Return)")
-
 tab_cur1, tab_cur2 = st.tabs(["Weights", "Risk Contribution"])
 
 with tab_cur1:
@@ -996,13 +993,13 @@ trade_threshold = 0.0001
 reb = compute_rebalance_metrics(w_current_u, w_opt, trade_threshold=trade_threshold)
 
 s1, s2, s3, s4 = st.columns(4)
-s1.metric("Turnover (Σ|Δw|/2)", f"{reb['turnover']:.2%}")
+s1.metric("Turnover", f"{reb['turnover']:.2%}")
 s2.metric("# Trades", f"{reb['n_trades']}")
 s3.metric("Max |Δw|", f"{reb['max_change']:.2%}")
 s4.metric("Adds / Trims", f"{reb['adds']} / {reb['trims']}")
 
 # ---------- Downloads ----------
-st.caption("Exports are designed for execution workflow (trades + weights).")
+st.caption("Downloads trades and weights data.")
 
 idx = list(cov_annual.columns)
 wc = w_current_u.reindex(idx).fillna(0.0)
