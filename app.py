@@ -9,10 +9,10 @@ from typing import Any, Tuple
 # Portfolio Analysis Dashboard (Part II - Streamlit)
 # -----------------------------------------------------------------------------
 # Purpose
-#   This Streamlit app is an interactive prototype that:
+#   This Streamlit app is a prototype that:
 #     1) Loads a single Excel workbook (.xlsx) that follows the provided template
 #        - Sheets required: "Input", "Current Portfolio", "Close Price Data"
-#     2) Computes (Part I-aligned) inputs:
+#     2) Computes inputs:
 #        - Expected returns (μ) from "Input"
 #        - Annualized covariance matrix (Σ) from "Close Price Data" using log returns
 #     3) Evaluates current portfolio metrics and risk contributions
@@ -29,10 +29,6 @@ from typing import Any, Tuple
 #   Streamlit Cloud:
 #     - Deploy this repo (app.py + requirements.txt + runtime.txt recommended)
 #     - Open the app URL and upload the same-format Excel workbook
-#
-# Notes
-#   - The app is written to be deterministic given the same uploaded file + slider settings.
-#   - Solver: SciPy SLSQP. Numerical stability handled via scalar-safe helpers (to_scalar/.item()).
 # =============================================================================
 
 # =========================
@@ -72,9 +68,8 @@ st.markdown("---")
 # Helpers: numeric/scalar safety
 # =========================
 # These helpers make the optimization code robust by:
-#   - forcing consistent ndarray shapes (1D vectors / column vectors)
-#   - ensuring any objective/constraint returns a true Python float scalar
-# This is critical for SciPy SLSQP and avoids common "only 0-d arrays" TypeErrors.
+# forcing consistent ndarray shapes (1D vectors / column vectors)
+# ensuring any objective/constraint returns a true Python float scalar
 def as1d(w) -> np.ndarray:
     """Force 1D float64 array."""
     return np.asarray(w, dtype=np.float64).reshape(-1)
