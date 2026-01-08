@@ -5,16 +5,49 @@ from scipy.optimize import minimize
 from pathlib import Path
 from typing import Any, Tuple
 
+# =============================================================================
+# Portfolio Analysis Dashboard (Part II - Streamlit)
+# -----------------------------------------------------------------------------
+# Purpose
+#   This Streamlit app is an interactive prototype that:
+#     1) Loads a single Excel workbook (.xlsx) that follows the provided template
+#        - Sheets required: "Input", "Current Portfolio", "Close Price Data"
+#     2) Computes (Part I-aligned) inputs:
+#        - Expected returns (μ) from "Input"
+#        - Annualized covariance matrix (Σ) from "Close Price Data" using log returns
+#     3) Evaluates current portfolio metrics and risk contributions
+#     4) Produces an optimized portfolio under multiple approaches + constraints
+#     5) Provides tables, charts, and downloadable CSV outputs for reproducibility
+#
+# Reproducibility (How someone else can run this)
+#   Local run:
+#     - Install dependencies listed in requirements.txt (Streamlit + numpy/pandas/scipy/openpyxl/matplotlib)
+#     - From the project folder (same directory as app.py), run:
+#           streamlit run app.py
+#     - Upload an Excel file that matches the Input.xlsx template (sheet names/columns)
+#
+#   Streamlit Cloud:
+#     - Deploy this repo (app.py + requirements.txt + runtime.txt recommended)
+#     - Open the app URL and upload the same-format Excel workbook
+#
+# Notes
+#   - The app is written to be deterministic given the same uploaded file + slider settings.
+#   - Solver: SciPy SLSQP. Numerical stability handled via scalar-safe helpers (to_scalar/.item()).
+# =============================================================================
+
 # =========================
 # Page config
 # =========================
+# Streamlit page metadata and layout (wide layout for dashboard-style panels/tables).
 st.set_page_config(page_title="Portfolio Part II (Streamlit)", layout="wide")
 
 # =========================
 # Header with logo (center title)
 # =========================
+# Optional brand/logo display. FE.png must be in the same folder as app.py.
 logo_path = Path(__file__).parent / "FE.png"
 
+# Create a 3-column header row so the title stays centered while logo is right-aligned.
 col_left, col_center, col_right = st.columns([1, 4, 1], vertical_alignment="center")
 
 with col_center:
@@ -38,6 +71,10 @@ st.markdown("---")
 # =========================
 # Helpers: numeric/scalar safety
 # =========================
+# These helpers make the optimization code robust by:
+#   - forcing consistent ndarray shapes (1D vectors / column vectors)
+#   - ensuring any objective/constraint returns a true Python float scalar
+# This is critical for SciPy SLSQP and avoids common "only 0-d arrays" TypeErrors.
 def as1d(w) -> np.ndarray:
     """Force 1D float64 array."""
     return np.asarray(w, dtype=np.float64).reshape(-1)
@@ -59,6 +96,9 @@ def to_scalar(x) -> float:
 # =========================
 # Helpers: ticker normalize
 # =========================
+# Many errors in reproducibility come from ticker formatting mismatches:
+# e.g., " lqd " vs "LQD". These functions normalize tickers across all sheets so
+# we can align μ, Σ, and weights by a single consistent ticker index.
 def norm_ticker_index(idx) -> pd.Index:
     return pd.Index(idx).astype(str).str.strip().str.upper()
 
@@ -76,6 +116,9 @@ def norm_cov(cov: pd.DataFrame) -> pd.DataFrame:
 # =========================
 # Formatting helpers
 # =========================
+# Display utilities used by Streamlit tables:
+# - Percent formatting for portfolio weights / RC shares
+# - Float formatting for variance-related outputs
 def fmt_pct(x: float) -> str:
     if pd.isna(x):
         return ""
@@ -86,6 +129,9 @@ def fmt_float(x: float) -> str:
         return ""
     return f"{x:.6f}"
 
+# Styling: weight comparison table
+# - Highlights the top N largest absolute changes
+# - Adds heatmap gradients to improve interpretability for reviewers/users
 def style_weights_table(df: pd.DataFrame, highlight_top_n: int = 5):
     df2 = df.copy()
 
@@ -118,6 +164,9 @@ def style_weights_table(df: pd.DataFrame, highlight_top_n: int = 5):
 
     return sty
 
+# Weight comparison: aligns indices across current and optimized weights and produces:
+#   - a raw DataFrame (for sorting / downloads)
+#   - a styled version (for on-screen display)
 def make_weights_comparison_table(
     w_current: pd.Series,
     w_opt: pd.Series,
@@ -143,6 +192,7 @@ def make_weights_comparison_table(
     sty = style_weights_table(df, highlight_top_n=top_n_highlight)
     return df, sty
 
+# Styling: current weights table for quick visual concentration check
 def style_current_weights_table(w_current: pd.Series):
     df = (w_current * 100.0).to_frame("Current Weight (%)").round(2)
     return (
@@ -151,6 +201,8 @@ def style_current_weights_table(w_current: pd.Series):
         .background_gradient(subset=["Current Weight (%)"], cmap="Blues")
     )
 
+# Styling: risk contribution (RC) table
+# Outputs both the raw DataFrame and styled version used by Streamlit.
 def style_rc_table(rc_tbl: pd.DataFrame):
     df = rc_tbl.copy()
     df["weight (%)"] = (df["weight"] * 100.0).round(2)
@@ -175,6 +227,12 @@ def style_rc_table(rc_tbl: pd.DataFrame):
 # =========================
 # Portfolio_stats
 # =========================
+# Computes standard portfolio statistics:
+#   Return: w'μ
+#   Variance: w'Σw
+#   Volatility: sqrt(variance)
+#   Sharpe: (Return - rf) / Vol
+# Important: alignment is done to cov.columns to ensure weights/mu match Σ ordering.
 def portfolio_stats(weights: pd.Series, mu: pd.Series, cov: pd.DataFrame, rf: float = 0.0) -> dict:
     weights = weights.copy()
     weights.index = weights.index.astype(str).str.strip().str.upper()
@@ -202,6 +260,12 @@ def portfolio_stats(weights: pd.Series, mu: pd.Series, cov: pd.DataFrame, rf: fl
 # =========================
 # Risk contribution (aligned to cov.columns)
 # =========================
+# Risk contribution decomposition uses variance contributions:
+#   sigma_w = Σw
+#   MRC_i (to variance) = (Σw)_i
+#   RC_i (to variance)  = w_i * (Σw)_i
+#   RC Share_i          = RC_i / (w'Σw)
+# Output sorted by RC Share descending to highlight concentration risk.
 def risk_contribution_table(weights: pd.Series, cov: pd.DataFrame) -> pd.DataFrame:
     weights = norm_series_index(weights)
     cov = norm_cov(cov)
@@ -237,6 +301,10 @@ def risk_contribution_table(weights: pd.Series, cov: pd.DataFrame) -> pd.DataFra
 
     return out
 
+# Rebalance metrics provide an implementation-oriented summary:
+#   - turnover: sum(|Δw|)/2
+#   - # trades: count of assets above threshold change
+#   - adds/trims: direction of changes above threshold
 def compute_rebalance_metrics(w_current: pd.Series, w_opt: pd.Series, trade_threshold: float = 0.005) -> dict:
     w_current = norm_series_index(w_current)
     w_opt = norm_series_index(w_opt)
@@ -264,6 +332,9 @@ def compute_rebalance_metrics(w_current: pd.Series, w_opt: pd.Series, trade_thre
         "threshold": trade_threshold,
     }
 
+# Before/after risk summary is a compact comparison table for write-up:
+#   - risk concentration: Top-3 RC share, Max RC share
+#   - policy buckets: SGOV, Equity bucket, Illiquid bucket
 def compute_before_after_risk_summary(
     w_current: pd.Series,
     w_opt: pd.Series,
@@ -309,12 +380,17 @@ def compute_before_after_risk_summary(
     out["Δ"] = out["Optimized"] - out["Current"]
     return out
 
+# Download helper: stable, easy to reproduce results outside the app (Excel/R/Python).
 def make_download_bytes(df: pd.DataFrame) -> bytes:
     return df.to_csv(index=True).encode("utf-8")
 
 # =========================
 # Part I μ loader
 # =========================
+# Loads expected return (μ) from the Input sheet.
+# IMPORTANT: This loader is Part I-aligned by design:
+#   - Reads specific columns and skiprows based on the template workbook
+#   - Converts percent to decimal by dividing by 100
 def load_mu_part1(uploaded) -> tuple[pd.Series, str]:
     xls = pd.ExcelFile(uploaded)
     if "Input" not in xls.sheet_names:
@@ -331,6 +407,11 @@ def load_mu_part1(uploaded) -> tuple[pd.Series, str]:
 # =========================
 # Part I Σ loader
 # =========================
+# Loads Close Price Data and computes annualized covariance Σ:
+#   - Parse a date column (either a column named Date/Datetime or the first column)
+#   - Sort by date, coerce prices to numeric
+#   - Compute log returns and annualize covariance with 252 trading days
+# Returns meta diagnostics to help reviewers validate data coverage & missingness.
 def load_cov_part1(uploaded) -> tuple[pd.DataFrame, str, dict]:
     xls = pd.ExcelFile(uploaded)
     if "Close Price Data" not in xls.sheet_names:
@@ -386,6 +467,10 @@ def load_cov_part1(uploaded) -> tuple[pd.DataFrame, str, dict]:
 # =========================
 # Policy constraints helper (CRITICAL FIX: always return scalar)
 # =========================
+# All policy constraints are injected into SciPy's constraint list.
+# IMPORTANT: each 'fun' must return a scalar float (not numpy array), hence to_scalar().
+# Constraint interpretation (ineq):
+#   fun(w) >= 0  is required by SciPy
 def add_policy_constraints(
     constraints: list,
     tickers: list[str],
@@ -421,6 +506,11 @@ def add_policy_constraints(
 # =========================
 # Solvers
 # =========================
+# Three portfolio construction approaches (all SLSQP):
+#   A) Theoretical Optimal: mean-variance utility maximization with bounds + policy caps
+#   B) Incremental: adds per-asset active weight bounds relative to current holdings
+#   C) Risk Budget: adds a penalty term to discourage risk concentration (RC share caps)
+# Output is always a normalized weight vector (sum to 1).
 def solve_part1_theoretical(
     mu_annual: pd.Series,
     cov_annual: pd.DataFrame,
@@ -645,6 +735,10 @@ def solve_part1_risk_budget(
 # =========================
 # Constraints report
 # =========================
+# Generates a simple pass/fail table for the key constraints configured in the sidebar.
+# This is meant for:
+#   - quick sanity check in the UI
+#   - easy copy/paste into write-up or appendix as evidence of constraint compliance
 def constraints_report(
     w_opt: pd.Series,
     w_current: pd.Series | None,
@@ -703,6 +797,8 @@ def constraints_report(
 # =========================
 # Sidebar: upload + preview
 # =========================
+# The app is designed around a single uploaded Excel workbook.
+# Repro tip: reviewers can validate format immediately by checking the live preview table.
 st.sidebar.header("1) Data Input")
 uploaded = st.sidebar.file_uploader("Upload Excel (.xlsx)", type=["xlsx"], key="file_uploader")
 
@@ -722,6 +818,8 @@ st.dataframe(df_preview, use_container_width=True)
 # =========================
 # Sidebar: settings
 # =========================
+# All UI controls are in the sidebar to keep the main page focused on outputs.
+# "rf" is used only for Sharpe display (not optimization unless target-return/min-var path uses it indirectly).
 st.sidebar.header("2) Optimization Settings")
 
 rf = st.sidebar.number_input(
@@ -774,17 +872,23 @@ fegix_max = st.sidebar.slider("FEGIX max", 0.0, 1.00, 0.20, 0.01, key="fegix_max
 illiquid_max = st.sidebar.slider("Illiquid bucket max", 0.0, 1.00, 0.20, 0.01, key="illiquid_max_slider")
 equity_max   = st.sidebar.slider("Equity bucket max",   0.0, 1.00, 0.60, 0.01, key="equity_max_slider")
 
+# Buckets used in policy constraints and summary tables:
+# - illiquid_tickers: assets treated as less liquid (cap total weight)
+# - equity_tickers: equity bucket for exposure cap
 illiquid_tickers = ("FECRX", "FERLX")
 equity_tickers   = ("FEGIX", "SGOIX", "FEAIX", "FESCX", "FESMX")
 
 max_active = turnover_cap = None
 max_rc_share = top3_rc_cap = None
 
+# Approach-specific controls:
+# B) Incremental: additional constraints around active weights and turnover.
 if approach.startswith("B)"):
     st.sidebar.subheader("Constraints (Incremental)")
     max_active = st.sidebar.slider("Max |w - w_current| per asset", 0.00, 0.50, 0.10, 0.01, key="max_active_slider")
     turnover_cap = st.sidebar.slider("Max turnover (sum |Δw|)", 0.00, 2.00, 0.50, 0.01, key="turnover_cap_slider")
 
+# C) Risk Budget: sets caps on risk contribution concentration via penalty terms.
 if approach.startswith("C)"):
     st.sidebar.subheader("Constraints (Risk Budget)")
     max_rc_share = st.sidebar.slider("Max RC Share per asset", 0.05, 1.00, 0.30, 0.01, key="max_rc_share_slider")
@@ -796,12 +900,16 @@ run = st.sidebar.button("Run Optimization", type="primary", key="run_button")
 # =========================
 # Load sheets
 # =========================
+# Input validation: enforce that the workbook has the required sheets for Part I alignment.
 need = {"Current Portfolio", "Input", "Close Price Data"}
 missing = need - set(xls.sheet_names)
 if missing:
     st.error(f"Missing required sheets for Part I alignment: {missing}")
     st.stop()
 
+# Current Portfolio sheet must contain:
+#   - Ticker: identifier
+#   - Current Allocations: numeric weights (will be normalized to sum to 1)
 cur = pd.read_excel(uploaded, sheet_name="Current Portfolio")
 if "Ticker" not in cur.columns or "Current Allocations" not in cur.columns:
     st.error("Current Portfolio sheet must contain columns: 'Ticker' and 'Current Allocations'")
@@ -814,14 +922,18 @@ w_current = cur.set_index("Ticker")["Current Allocations"].astype(float)
 w_current = w_current / w_current.sum()
 w_current = norm_series_index(w_current)
 
+# Load μ and Σ using Part I-aligned loaders (template-dependent).
 mu_all, mu_src = load_mu_part1(uploaded)
 cov_annual, cov_src, cov_meta = load_cov_part1(uploaded)
 
+# Universe is defined by Σ columns (i.e., tickers with price history).
 universe = list(cov_annual.columns)
 
+# Align current weights to the Σ universe and normalize.
 w_current_u = w_current.reindex(universe).fillna(0.0)
 w_current_u = w_current_u / w_current_u.sum()
 
+# Align μ to the Σ universe and validate coverage (missing μ is a hard stop).
 mu_u = mu_all.reindex(universe)
 if mu_u.isna().any():
     missing_mu = mu_u[mu_u.isna()].index.tolist()
@@ -831,6 +943,8 @@ if mu_u.isna().any():
 # =========================
 # Current snapshot
 # =========================
+# Presents baseline metrics and diagnostic tables for the current portfolio.
+# This makes the app self-contained for reviewers: they can see inputs and results in one place.
 st.subheader("Current Portfolio Snapshot")
 st.caption(
     f"Universe: {len(universe)} tickers | Current holdings: {int((w_current_u > 0).sum())} "
@@ -857,6 +971,8 @@ with tab_cur2:
 # =========================
 # Recommended Portfolio output
 # =========================
+# Optimization is only triggered when the user clicks "Run Optimization".
+# This prevents unnecessary compute while the user is adjusting constraints.
 st.divider()
 st.subheader("Recommended Portfolio Output")
 
@@ -864,6 +980,7 @@ if not run:
     st.info("Adjust constraints in the sidebar, then click **Run Optimization**.")
     st.stop()
 
+# The try/except block ensures that any data/constraint issues are shown as a clean UI error.
 try:
     if objective == "Mean-Variance":
         if approach.startswith("A)"):
@@ -913,6 +1030,8 @@ try:
             )
 
     elif objective == "Min Variance (extra)":
+        # Implements a minimum-variance portfolio by setting μ=0
+        # and reusing the same utility form with a fixed λ.
         mu_zero = mu_u * 0.0
         w_opt = solve_part1_theoretical(
             mu_annual=mu_zero,
@@ -929,6 +1048,7 @@ try:
         )
 
     else:
+        # Target Return: minimize variance subject to return constraint (w'μ >= target_return).
         if target_return is None:
             raise ValueError("Target return is required.")
 
@@ -976,6 +1096,7 @@ except Exception as e:
     st.error(str(e))
     st.stop()
 
+# Final normalization & universe alignment for consistent downstream tables/charts.
 w_opt = norm_series_index(w_opt).reindex(universe).fillna(0.0)
 w_opt = w_opt / w_opt.sum()
 
@@ -987,6 +1108,10 @@ m2.metric("Vol (Ann.)", f"{opt_stats['vol']*100:.2f}%")
 m3.metric("Sharpe (Rf)", f"{opt_stats['sharpe']:.2f}" if np.isfinite(opt_stats["sharpe"]) else "NA")
 
 # ---------- Rebalance Summary ----------
+# This section translates "optimized weights" into an actionable summary:
+# - how much trading (turnover) is implied
+# - number of meaningful trades
+# - largest single-name change
 st.subheader("Rebalance Summary")
 
 trade_threshold = 0.0001
@@ -999,6 +1124,9 @@ s3.metric("Max |Δw|", f"{reb['max_change']:.2%}")
 s4.metric("Adds / Trims", f"{reb['adds']} / {reb['trims']}")
 
 # ---------- Downloads ----------
+# Download buttons provide reproducible artifacts (CSV) for reviewer validation:
+# - trades.csv: current vs optimized weights + changes
+# - weights.csv: final optimized weights
 st.caption("Downloads trades and weights data.")
 
 idx = list(cov_annual.columns)
@@ -1037,6 +1165,10 @@ with d2:
 # =========================
 # Tabs
 # =========================
+# Output organization:
+#   - Weights: comparison + top trades + bar chart
+#   - Risk Contribution: RC table + bar chart
+#   - Constraints Check: evidence the solution satisfies constraints
 tab1, tab2, tab3 = st.tabs(["Weights", "Risk Contribution", "Constraints Check"])
 
 with tab1:
