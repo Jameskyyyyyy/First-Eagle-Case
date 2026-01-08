@@ -36,7 +36,7 @@ with col_right:
 st.markdown("---")
 
 # =========================
-# Helpers: numeric/scalar safety (CRITICAL FIX)
+# Helpers: numeric/scalar safety
 # =========================
 def as1d(w) -> np.ndarray:
     """Force 1D float64 array."""
@@ -173,7 +173,7 @@ def style_rc_table(rc_tbl: pd.DataFrame):
     return df, sty
 
 # =========================
-# Part I-aligned portfolio_stats (DO NOT CHANGE)
+# Portfolio_stats
 # =========================
 def portfolio_stats(weights: pd.Series, mu: pd.Series, cov: pd.DataFrame, rf: float = 0.0) -> dict:
     weights = weights.copy()
@@ -215,12 +215,6 @@ def risk_contribution_table(weights: pd.Series, cov: pd.DataFrame) -> pd.DataFra
         weights.reindex(tickers).fillna(0.0).astype(float).values,
         dtype=np.float64
     ).reshape(-1, 1)
-
-    st.caption(
-        f"[DEBUG RC] w shape={w.shape}, w dtype={w.dtype} | "
-        f"cov shape={cov_m.shape}, cov dtype={cov_m.dtype} | "
-        f"cov NaNs={int(np.isnan(cov_m).sum())}"
-    )
 
     if np.isnan(cov_m).any():
         raise ValueError(
@@ -789,7 +783,7 @@ max_rc_share = top3_rc_cap = None
 if approach.startswith("B)"):
     st.sidebar.subheader("Constraints (Incremental)")
     max_active = st.sidebar.slider("Max |w - w_current| per asset", 0.00, 0.50, 0.10, 0.01, key="max_active_slider")
-    turnover_cap = st.sidebar.slider("Max turnover (sum |Δw|) [UI only]", 0.00, 2.00, 0.50, 0.01, key="turnover_cap_slider")
+    turnover_cap = st.sidebar.slider("Max turnover (sum |Δw|)", 0.00, 2.00, 0.50, 0.01, key="turnover_cap_slider")
 
 if approach.startswith("C)"):
     st.sidebar.subheader("Constraints (Risk Budget)")
@@ -839,7 +833,7 @@ if mu_u.isna().any():
 # =========================
 st.subheader("Current Portfolio Snapshot")
 st.caption(
-    f"Universe: {len(universe)} tickers | Current holdings: {int((w_current_u > 0).sum())} | "
+    f"Universe: {len(universe)} tickers | Current holdings: {int((w_current_u > 0).sum())} "
 )
 
 cur_stats = portfolio_stats(w_current_u, mu_u, cov_annual, rf=rf)
@@ -1051,7 +1045,6 @@ tab1, tab2, tab3 = st.tabs(["Weights", "Risk Contribution", "Constraints Check"]
 with tab1:
     st.write("Optimized Weights")
     w_df, w_sty = make_weights_comparison_table(w_current_u, w_opt, top_n_highlight=highlight_top_n)
-    st.caption("Highlighted rows = largest absolute rebalances (by |Δw|). All weights shown in %.")
     st.dataframe(w_sty, use_container_width=True, height=520)
 
     top_trades = w_df.sort_values("|Δ| (%)", ascending=False).head(highlight_top_n)
