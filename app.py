@@ -756,7 +756,7 @@ approach = st.sidebar.selectbox(
     key="approach_select"
 )
 
-st.sidebar.subheader("Constraints (Global)")
+st.sidebar.subheader(" Global Constraints")
 max_asset_weight = st.sidebar.slider(
     "Max weight per asset (single-name cap)", 0.05, 1.00, 0.40, 0.01, key="max_asset_weight_slider"
 )
