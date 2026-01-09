@@ -3,4 +3,5 @@ pandas
 numpy
 scipy
 openpyxl
+pathlib
 matplotlib
